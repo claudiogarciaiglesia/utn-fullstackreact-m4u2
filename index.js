@@ -1,14 +1,30 @@
 const util = require('util');
+const jwt = require('jsonwebtoken');
+const unless = require('express-unless');
+const bcrypt = require('bcrypt');
+const dotenv = require('dotenv').config();
+
 
 // Configuracion de express
 const express = require('express');
 const app = express();
+const { auth } = require(__dirname + '/auth');
+
 app.use(express.json());
+auth.unless = unless;
+app.use(auth.unless({
+    path: [
+        { url: '/login', methods: ['POST'] },
+        { url: '/registro', methods: ['POST'] },
+    ]
+}));
+
 const PORT = process.env.PORT || 3000;
 
 
 // Configuracion mysql
 const mysql = require('mysql');
+
 const conexion = mysql.createConnection({
     host: 'localhost',
     user: 'admin',
@@ -25,6 +41,83 @@ conexion.connect((error) => {
 });
 
 const qy = util.promisify(conexion.query).bind(conexion); // permite uso de async await con mysql
+
+// POST para registrar usuarios
+app.post('/registro', async (req, res) => {
+    try {
+        if (!req.body.usuario || !req.body.clave) {
+            throw new Error('Debe ingresar nombre de usuario y contraseña');
+        };
+
+        if (req.body.usuario.length <= 3) {
+            throw new Error('El usuario debe tener mas de 3 caracteres')
+        };
+
+        let query = 'SELECT * FROM usuarios WHERE nombre = ?';
+        let queryRes = await qy(query, [req.body.usuario.toLowerCase()]);
+        if (queryRes.length > 0) {
+            throw new Error('El nombre de usuario ya existe');
+        };
+
+        if (req.body.clave.length < 8) {
+            throw new Error('La calve debe tener 8 caracteres como minimo');
+        };
+
+        const claveEncriptada = await bcrypt.hash(req.body.clave, 10);
+
+        query = 'INSERT INTO usuarios (nombre, clave) VALUES (?, ?)';
+        queryRes = await qy(query, [req.body.usuario.toLowerCase(), claveEncriptada]);
+
+        res.status(200);
+        res.send('Usuario registrado correctamente');
+
+    } catch (e) {
+        res.status(413).send({ "Error": e.message });
+    }
+});
+
+// POST para login de usuarios
+app.post('/login', async (req, res) => {
+    try {
+        if (!req.body.usuario || !req.body.clave) {
+            throw new Error('Debe ingresar nombre de usuario y contraseña');
+        };
+
+        let query = 'SELECT * FROM usuarios WHERE nombre = ?';
+        let queryRes = await qy(query, [req.body.usuario.toLowerCase()]);
+
+        if (queryRes.length === 0) {
+            throw new Error('Nombre de usuario o clave incorrectos');
+        };
+
+
+        // Paso 1: buscar usuario en DB
+        // Si no se encuentra, throw error
+
+
+        // Paso 2: verificar la clave utilizando bcrypt
+        if (!bcrypt.compareSync(req.body.clave, queryRes[0].clave)) {
+            throw new Error("Nombre de usuario o clave incorrectos");
+        };
+
+        // Paso 3: sesion
+        const tokenData = {
+            nombre: queryRes[0].nombre,
+            user_id: queryRes[0].id
+        };
+
+        const token = jwt.sign(tokenData, process.env.SESSION_SECRET, {
+            expiresIn: 60 * 24 // expires in 24 hours
+        });
+
+        res.send({ token });
+
+
+    } catch (e) {
+        res.status(413).send({ message: e.message });
+    }
+});
+
 
 // POST para cargar nuevos clientes
 
